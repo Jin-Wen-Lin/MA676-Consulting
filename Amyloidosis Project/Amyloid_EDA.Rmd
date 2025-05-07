@@ -1,0 +1,549 @@
+---
+title: "Amyloid Analysis"
+author: "Jin Wen Lin"
+date: "2025-02-03"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,fig.align = "center")
+pacman::p_load(arm,
+      dplyr
+      , ggplot2
+      , ggExtra
+      , reshape2
+      , corrplot
+      , RColorBrewer
+      , lubridate
+      , tidymodels
+      , caret
+      , gridExtra
+      , knitr
+      , rstanarm
+      )
+```
+
+
+```{r}
+# load data
+positive <- read.csv("Amyloid_positive.csv")
+negative <- read.csv("Amyloid_negative.csv")
+# combined data
+overall <- rbind(positive, negative)
+
+# all patients (sampled + unsampled)
+patient_raw <- read.csv("Amyloid All Patients.csv")
+```
+
+
+```{r}
+# clean data
+str(overall)
+amyloid <- overall %>%
+  select(-c(X, X28, X42, X22, X11, X14, X8, X16)) %>%  # delete the columns that are not informative
+  mutate(
+    Amyloid = factor(ifelse(Amyloid == "Y", 1, 0)), # 1 for Y, 0 for N
+    Laterality = factor(Laterality),
+    Sex = factor(Sex),
+    Race = factor(ifelse(Race == "White", 1, 0)), # 1 for white, 0 for else
+    Monoclonal.Gammopathy = factor(Monoclonal.Gammopathy),
+    Rheumatoid.Arthritis = factor(Rheumatoid.Arthritis),
+    Coronary.Artery.Disease = factor(Coronary.Artery.Disease),
+    Afib = factor(Afib),
+    Degenerative.Spine.Disease = factor(Degenerative.Spine.Disease),
+    Diabetes = factor(Diabetes),
+    Tendinopathy = factor(Tendinopathy),
+    EMG = factor(EMG),
+    Bilateral. = factor(Bilateral.),
+    Bifringence = factor(Bifringence),
+    Grade = factor(Grade, levels = c("mild", "moderate", "severe"))  
+  )
+glimpse(amyloid)
+```
+
+```{r}
+overall$new_grade <- ifelse(overall$Grade == "severe", 1, 0)
+
+sum(overall$new_grade == 1 & overall$Amyloid == "0") 
+sum(overall$new_grade == 1 & overall$Amyloid == "1")
+sum(overall$new_grade == 0 & overall$Amyloid == "0")
+sum(overall$new_grade == 0 & overall$Amyloid == "1")
+
+```
+
+
+# EDA  
+
+Chi-Square test between the pairs of categorical variables
+
+```{r}
+categorical_data <- amyloid %>% 
+  select(where(is.factor))
+
+variables <- c("Laterality", "Sex", 
+               "Race", "Monoclonal.Gammopathy", 
+               "Rheumatoid.Arthritis", "Coronary.Artery.Disease", 
+               "Afib", "Degenerative.Spine.Disease", "Diabetes", 
+               "Tendinopathy", "EMG", "Bilateral.", "Grade")
+
+# Initialize a data frame to store results
+results <- data.frame(Variable = character(), 
+                      Statistic = numeric(), 
+                      p_value = numeric(), 
+                      stringsAsFactors = FALSE)
+
+# Perform Chi-square tests
+for (var in variables) {
+  # Create a contingency table
+  table_data <- table(categorical_data$Amyloid, categorical_data[[var]])
+  
+  # Chi-square test
+  test <- chisq.test(table_data, simulate.p.value = TRUE)
+  
+  # Store the results
+  results <- rbind(results, data.frame(
+    Variable = var,
+    Statistic = round(test$statistic, 2),
+    p_value = signif(test$p.value, 3)
+  ))
+}
+
+# Display results
+kable(results, caption = "Chi-Square Tests between Amyloid and Other Variables")
+```
+
+
+Fisher Test (https://stats.stackexchange.com/questions/81483/warning-in-r-chi-squared-approximation-may-be-incorrect)
+
+```{r}
+variables <- c("Laterality", "Sex", 
+               "Race", "Monoclonal.Gammopathy", 
+               "Rheumatoid.Arthritis", "Coronary.Artery.Disease", 
+               "Afib", "Degenerative.Spine.Disease", "Diabetes", 
+               "Tendinopathy", "EMG", "Bilateral.", "Grade")
+
+# Initialize a data frame to store results
+results <- data.frame(Variable = character(), 
+                      Statistic = numeric(), 
+                      p_value = numeric(), 
+                      stringsAsFactors = FALSE)
+
+# Perform Chi-square tests
+for (var in variables) {
+  # Create a contingency table
+  table_data <- table(categorical_data$Amyloid, categorical_data[[var]])
+  
+  # Chi-square test
+  test <- fisher.test(table_data)
+  
+  # Store the results
+  results <- rbind(results, data.frame(
+    Variable = var,
+    p_value = signif(test$p.value, 3)
+  ))
+}
+
+# Display results
+kable(results, caption = "Fisher Tests between Amyloid and Other Variables")
+```
+
+From the above chi-square tests between Amyloid vs other categorical variables, we can see that only the factors Afib, Bilateral, and Grade have p-values less than 0.05, hence these might be the risk factors that affect Amyloid.  
+
+
+```{r}
+# distribution of age (positive)
+par(mfrow = c(1, 3))
+hist(positive$Age, 
+     main = "Age Distribution-Amyloid Positive", 
+     xlab = "Age", 
+     col = "lightblue", 
+     border = "black", 
+     breaks = 20)  
+
+# distribution of age (negative)
+hist(negative$Age, 
+     main = "Age Distribution-Amyloid Negative", 
+     xlab = "Age", 
+     col = "lightpink", 
+     border = "black", 
+     breaks = 20)  
+
+# overall
+hist(overall$Age, 
+     main = "Overall Age Distribution", 
+     xlab = "Age", 
+     col = "grey", 
+     border = "black", 
+     breaks = 20) 
+```
+
+From the above histograms about the distribution of age in Amyloid positive and negative, we can see that the age distribution of Amyloid positive have a normal distribution, with the peak near the age about 75, where the age distribution of Amyloid negative is a little bit left skewed. By combining the data sets, we can see that the overall distribution of age is also left skewed.  
+
+
+```{r}
+# box plot of amyloid vs age
+ggplot(amyloid, aes(x = Amyloid, y = Age, fill = Amyloid)) +
+  geom_boxplot() +
+  ggtitle("Age vs Amyloid")
+```
+
+From the above box plot, we can see that the median age for people with no Amyloid is 70, and the age range is large (i.e there exist people with age under 40) compared to the people with Amyloid.  
+
+```{r}
+par(mfrow = c(1, 3))
+# distribution of points (positive)
+hist(positive$Points, 
+     main = "Points Distribution-Positive", 
+     xlab = "Points", 
+     col = "cyan3", 
+     border = "black", 
+     breaks = 20)  
+
+# distribution of points (negative)
+hist(negative$Points, 
+     main = "Points Distribution-Negative", 
+     xlab = "Points", 
+     col = "orange", 
+     border = "black", 
+     breaks = 20) 
+
+# overall
+hist(overall$Points, 
+     main = "Overall Points Distribution", 
+     xlab = "Points", 
+     col = "brown", 
+     border = "black", 
+     breaks = 20)
+```
+
+```{r}
+# box plot of amyloid vs points
+ggplot(amyloid, aes(x = Amyloid, y = Points, fill = Amyloid)) +
+  geom_boxplot() +
+  ggtitle("Age vs Nomogram Points")
+```
+
+```{r}
+# distribution of Amyloid
+ggplot(amyloid, aes(x = Amyloid)) + 
+  geom_bar(fill = "lightblue") + 
+  labs(title = "Distribution of Amyloid (1 for Y, 0 for N)", 
+       x = "Amyloid", y = "Count")
+```
+
+The data is imbalanced since there are way more Amyloid being negative compared to positive.  
+
+
+```{r}
+# updated data
+update_amyloid <- amyloid %>% 
+  select("Afib", "Bilateral.", "Grade", "Age", "Points", "Amyloid")
+```
+
+
+```{r}
+# distribution of Afib
+afib_dist <- ggplot(update_amyloid, aes(x = Afib)) + 
+  geom_bar(fill = "lightgreen") + 
+  labs(title = "Distribution of Afib", 
+       x = "Afib", y = "Count")
+
+# afib vs amyloid
+afib_vs_amyloid <- ggplot(amyloid, 
+                                 aes(x = Afib, fill = Amyloid)) + 
+  geom_bar(position = "fill") +
+  labs(title = "Amyloid by Afib", 
+       x = "Afib", y = "Proportion", fill = "Amyloid")
+
+grid.arrange(afib_dist, afib_vs_amyloid, ncol = 2, 
+             widths = c(0.2, 0.2), heights = 0.1)
+```
+
+From the above bar graphs, we can see that people with no Afib take the lead in the sample population. Additionally, by looking at the bar plot at the right, there are more Amyloid proportion in the patients with Afib compared to people with no Afib. Seems like people with Afib are having a greater probability of having Amyloid.  
+
+```{r}
+# distribution of Bilateral
+Bilateral_dist <- ggplot(update_amyloid, aes(x = Bilateral.)) + 
+  geom_bar(fill = "cornflowerblue") + 
+  labs(title = "Distribution of Bilateral", 
+       x = "Bilateral", y = "Count")
+
+# Bilateral vs amyloid
+Bilateral_vs_amyloid <- ggplot(amyloid, 
+                                 aes(x = Bilateral., fill = Amyloid)) + 
+  geom_bar(position = "fill") +
+  labs(title = "Amyloid by Bilateral", 
+       x = "Bilateral", y = "Proportion", fill = "Amyloid")
+
+grid.arrange(Bilateral_dist, Bilateral_vs_amyloid, ncol = 2, 
+             widths = c(0.2, 0.2), heights = 0.1)
+```
+
+From the above bar plots, we can see that there are more bilateral patients affected by carpal tunnel. Additionally, there is trend where there are more proportion of bilatral patients having Amyloid compared to those who are not.  
+
+```{r}
+# distribution of Grade
+Grade_dist <- ggplot(update_amyloid, aes(x = Grade)) + 
+  geom_bar(fill = "cyan4") + 
+  labs(title = "Distribution of Grade", 
+       x = "Grade", y = "Count")
+
+# Grade vs amyloid
+Grade_vs_amyloid <- ggplot(amyloid, 
+                                 aes(x = Grade, fill = Amyloid)) + 
+  geom_bar(position = "fill") +
+  labs(title = "Amyloid by Grade", 
+       x = "Grade", y = "Proportion", fill = "Amyloid")
+
+grid.arrange(Grade_dist, Grade_vs_amyloid, ncol = 2, 
+             widths = c(0.2, 0.2), heights = 0.1)
+```
+
+From the above bar plots, most of the people have carpal tunnel severity of moderate and severe. All the people with mild severity and no response have no amyloid. The proportion of having amyloid is higher in people with severe carpal tunnel compared to people with moderate carpal tunnel.  
+
+```{r}
+# distribution of Race
+race_dist <- ggplot(amyloid, aes(x = Race)) + 
+  geom_bar(fill = "darkolivegreen") + 
+  labs(title = "Distribution of Race", 
+       x = "Race", y = "Count")
+
+# Race vs amyloid
+race_vs_amyloid <- ggplot(amyloid, 
+                                 aes(x = Race, fill = Amyloid)) + 
+  geom_bar(position = "fill") +
+  labs(title = "Amyloid by Race", 
+       x = "Race", y = "Proportion", fill = "Amyloid")
+
+grid.arrange(race_dist, race_vs_amyloid, ncol = 2, 
+             widths = c(0.2, 0.2), heights = 0.1)
+```
+
+```{r}
+# distribution of degenerative spine disease
+dsd_dist <- ggplot(amyloid, aes(x = Degenerative.Spine.Disease)) + 
+  geom_bar(fill = "deepskyblue") + 
+  labs(title = "Distribution of Degenerative.Spine.Disease", 
+       x = "Degenerative.Spine.Disease", y = "Count")
+
+# Degenerative.Spine.Disease vs amyloid
+dsd_vs_amyloid <- ggplot(amyloid, 
+                                 aes(x = Degenerative.Spine.Disease, fill = Amyloid)) + 
+  geom_bar(position = "fill") +
+  labs(title = "Amyloid by Degenerative.Spine.Disease", 
+       x = "Degenerative.Spine.Disease", y = "Proportion", fill = "Amyloid")
+
+grid.arrange(dsd_dist, dsd_vs_amyloid, ncol = 2, 
+             widths = c(0.2, 0.2), heights = 0.1)
+```
+
+```{r}
+# distribution of monoclonal Gammopathy
+mg_dist <- ggplot(amyloid, aes(x = Monoclonal.Gammopathy)) + 
+  geom_bar(fill = "darkslategray") + 
+  labs(title = "Distribution of Monoclonal.Gammopathy", 
+       x = "Monoclonal.Gammopathy", y = "Count")
+
+# Degenerative.Spine.Disease vs amyloid
+mg_vs_amyloid <- ggplot(amyloid, 
+                                 aes(x = Monoclonal.Gammopathy, fill = Amyloid)) + 
+  geom_bar(position = "fill") +
+  labs(title = "Amyloid by Monoclonal.Gammopathy", 
+       x = "Monoclonal.Gammopathy", y = "Proportion", fill = "Amyloid")
+
+grid.arrange(mg_dist, mg_vs_amyloid, ncol = 2, 
+             widths = c(0.2, 0.2), heights = 0.1)
+```
+
+```{r}
+# distribution of Rheumatoid Arthritis
+ra_dist <- ggplot(amyloid, aes(x = Rheumatoid.Arthritis)) + 
+  geom_bar(fill = "darksalmon") + 
+  labs(title = "Distribution of Rheumatoid.Arthritis", 
+       x = "Rheumatoid.Arthritis", y = "Count")
+
+# Rheumatoid.Arthritis vs amyloid
+ra_vs_amyloid <- ggplot(amyloid, 
+                                 aes(x = Rheumatoid.Arthritis, fill = Amyloid)) + 
+  geom_bar(position = "fill") +
+  labs(title = "Amyloid by Rheumatoid.Arthritis", 
+       x = "Rheumatoid.Arthritis", y = "Proportion", fill = "Amyloid")
+
+grid.arrange(ra_dist, ra_vs_amyloid, ncol = 2, 
+             widths = c(0.2, 0.2), heights = 0.1)
+```
+
+
+
+Here is the correlation between the two numerical variables (age and points).  
+
+```{r}
+# correlation between age and points
+cor(update_amyloid$Age, update_amyloid$Points)
+```
+Here is the independence check of the categorical predictors vs Afib.
+
+```{r}
+variables <- c( "Bilateral.", "Grade")
+
+# Initialize a data frame to store results
+results <- data.frame(Variable = character(), 
+                      Statistic = numeric(), 
+                      p_value = numeric(), 
+                      stringsAsFactors = FALSE)
+
+# Perform Chi-square tests
+for (var in variables) {
+  # Create a contingency table
+  table_data <- table(categorical_data$Afib, categorical_data[[var]])
+  
+  # Chi-square test
+  test <- chisq.test(table_data, simulate.p.value = TRUE)
+  
+  # Store the results
+  results <- rbind(results, data.frame(
+    Variable = var,
+    Statistic = round(test$statistic, 2),
+    p_value = signif(test$p.value, 3)
+  ))
+}
+
+# Display results
+kable(results, caption = "Chi-Square Tests between Afib and Other Variables")
+```
+
+
+```{r}
+variables <- c( "Bilateral.", "Grade")
+
+# Initialize a data frame to store results
+results <- data.frame(Variable = character(), 
+                      Statistic = numeric(), 
+                      p_value = numeric(), 
+                      stringsAsFactors = FALSE)
+
+# Perform fisher tests
+for (var in variables) {
+  # Create a contingency table
+  table_data <- table(categorical_data$Afib, categorical_data[[var]])
+  
+  # fisher test
+  test <- fisher.test(table_data, simulate.p.value = TRUE)
+  
+  # Store the results
+  results <- rbind(results, data.frame(
+    Variable = var,
+    p_value = signif(test$p.value, 3)
+  ))
+}
+
+# Display results
+kable(results, caption = "Fisher Tests between Afib and Other Variables")
+```
+
+Seems like Bilateral and Afib have very strong association. Hence, in order to avoid the issue of multicollinearity, only keep Afib.  
+
+
+# Modeling  
+
+```{r}
+# logistic regression
+fit_1 <- stan_glm(Amyloid ~ Age + Points + Afib + Grade,  
+  data = update_amyloid,  
+  family = binomial(link = "logit"),  
+  chains = 4, iter = 2000, warmup = 1000, seed = 123, refresh = 0)
+summary(fit_1)
+# credible interval
+posterior_interval(fit_1, prob = 0.95)
+
+# with normalized age and points
+
+update_amyloid$new_age <- scale(update_amyloid$Age)
+update_amyloid$new_points <- scale(update_amyloid$Points)
+
+fit_2 <- stan_glm(Amyloid ~ Age + new_points + Afib + Bilateral. + Grade,  
+  data = update_amyloid,  
+  family = binomial(link = "logit"),  
+  chains = 4, iter = 2000, warmup = 1000, seed = 123, refresh = 0)
+summary(fit_2)
+# credible interval
+posterior_interval(fit_2, prob = 0.95)
+
+# Added prior, set to normal(0, 10) and remove age
+
+fit_3 <- stan_glm(Amyloid ~ new_points + Afib + Grade,  
+  data = update_amyloid,  
+  family = binomial(link = "logit"), 
+  prior = normal(0, 10),
+  chains = 10, iter = 4000, warmup = 1000, seed = 123, refresh = 0)
+summary(fit_3)
+# credible interval
+posterior_interval(fit_3, prob = 0.95)
+
+```
+There are no much difference between the default prior versus self defined prior. Hence, by looking at the models, only with Grade severe is statistically significant at 95% confidence level.  
+
+
+# log and square root transformation of points
+
+```{r}
+# distribution of log points (positive)
+hist(log(positive$Points), 
+     main = "Log Points Distribution (Amyloid Positive)", 
+     xlab = "Points", 
+     col = "lightblue", 
+     border = "black", 
+     breaks = 20)  
+
+# distribution of log points (negative)
+hist(log(negative$Points), 
+     main = "Log Points Distribution (Amyloid Negative)", 
+     xlab = "Points", 
+     col = "lightpink", 
+     border = "black", 
+     breaks = 20)  
+
+# distribution of sqrt points (positive)
+hist(sqrt(positive$Points), 
+     main = "sqrt Points Distribution (Amyloid Positive)", 
+     xlab = "Points", 
+     col = "lightblue", 
+     border = "black", 
+     breaks = 20)  
+
+# distribution of sqrt points (negative)
+hist(sqrt(negative$Points), 
+     main = "sqrt Points Distribution (Amyloid Negative)", 
+     xlab = "Points", 
+     col = "lightpink", 
+     border = "black", 
+     breaks = 20)  
+```
+
+
+
+```{r}
+# covariances for each class (if considering both age and points)
+cov_positive <- cov(update_amyloid[update_amyloid$Amyloid == "1", c("Age", "Points")])
+cov_negative <- cov(update_amyloid[update_amyloid$Amyloid == "0", c("Age", "Points")])
+
+# print the covariances
+print(cov_positive)
+print(cov_negative)
+
+```
+
+
+# Naive Bayes  
+
+```{r}
+library(e1071)
+
+# naive bayes model
+nb.fit <- naiveBayes(Amyloid ~ new_points + Afib + Grade, data = update_amyloid)
+nb.fit
+```
+
+
+
+
