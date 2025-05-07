@@ -1,0 +1,309 @@
+---
+title: ''
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F,message=F,warning = F)
+```
+
+# EDA
+
+```{r,echo=F,message=F}
+library(tidyverse)
+library(Amelia)
+library(ggpubr)
+
+Amyloid_negative = read.csv('Amyloid_negative.csv')
+Amyloid_negative$Amyloid = ifelse(Amyloid_negative$Amyloid =='Y', 1, 0)
+
+Amyloid_positive = read.csv('Amyloid_positive.csv')
+Amyloid_positive$Amyloid = ifelse(Amyloid_positive$Amyloid =='Y', 1, 0)
+
+Amyloid_data <- rbind.data.frame(Amyloid_negative,Amyloid_positive)
+
+Amyloid_data[Amyloid_data == 'n/a'] = NA
+```
+
+# 1 Visualizing missing values
+
+![](20250218013554.png)
+
+# 2 Age distribution
+
+```{r}
+p1 = ggplot(Amyloid_data, aes(x = Age)) +
+  geom_histogram(binwidth = 5, fill = "lightgreen", color = "black", alpha = 0.7) +
+  labs(x = "Age", y = "Count", title = "Age Distribution") +
+  theme_minimal()
+
+p2 = ggplot(Amyloid_data, aes(x = factor(Amyloid), y = Age)) +
+  geom_boxplot(fill = "lightgreen") +
+  labs(x = "Amyloidosis (No = Negative, Yes = Positive)",
+       y = "Age", title = "Age Distribution by Amyloidosis") +
+  scale_x_discrete(labels = c("No", "Yes")) +
+  theme_minimal()
+
+ggarrange(p1, p2, ncol = 2, nrow = 1)
+```
+
+### 1. **Age distribution (left histogram)**
+- Age is mainly concentrated between 60 and 80 years old, especially around 70 years old, and the data volume is relatively dense. Most patients are between 60 and 80 years old, showing a left-skewed distribution trend. This means that older patients occupy more samples than younger patients.
+
+### 2. **Age box plot grouped by Amyloid status (right box plot)**
+- The age distribution of the **Amyloid Negative group** is relatively concentrated, close to around 70 years old, and there are some extreme values (below 40 years old), showing a left-skewed distribution. This means that most patients in the negative group are relatively young, and there are some young patients.
+- The median age of the **Amyloid Positive group** is slightly higher than that of the negative group, concentrated around 70 years old. The IQR (interquartile range) range of the positive group is narrower, showing an approximate normal distribution. Most of the patients in this group were around 70 years old, and the age distribution was relatively uniform without significant skewness, indicating that the age of amyloid-positive patients was relatively uniform and concentrated in the older age group.
+
+
+# 3 Sex distribution
+
+```{r}
+p1 = ggplot(Amyloid_data, aes(x = Sex)) +
+  geom_bar(fill = "lightcoral",col = 'black') +
+  labs(x = "Sex", y = "Count", title = "Gender Distribution") +
+  theme_minimal()
+
+p2 = ggplot(Amyloid_data, aes(x = Sex, fill = factor(Amyloid))) +
+  geom_bar(position = "fill",col = 'black') +
+  labs(x = "Sex", y = "Proportion", 
+       title = "Gender Distribution by Amyloidosis") +
+  scale_fill_manual(values = c("lightblue", "lightcoral"),
+                    name = "Amyloidosis", labels = c("No", "Yes")) +
+  theme_minimal()
+ggarrange(p1, p2, ncol = 2, nrow = 1)
+```
+
+### 1. **Gender distribution (left bar chart)**
+- The vast majority of patients in the dataset are male ("M"), with a number of 180, while there are only 9 females ("F"). This shows that the gender ratio in this dataset is seriously unbalanced, and most patients are male.
+
+### 2. **Gender distribution by amyloidosis status (right stacked bar chart)**
+- For **amyloid negative** (Amyloid = 0, blue), the gender distribution shows a relatively balanced state, with 143 males and 9 females, indicating that all female patients in the data belong to the negative group.
+- For **amyloid positive** (Amyloid = 1, red), all patients are males, and females do not appear in the positive group at all. This result further shows that **amyloid positive** patients are composed only of males.
+
+# 4 Race distribution
+
+```{r}
+p1 = ggplot(Amyloid_data, aes(x = Race)) +
+  geom_bar(fill = "lightyellow",col = 'black') +
+  labs(x = "Race", y = "Count", title = "Race Distribution") +
+  theme_minimal()
+
+p2 = ggplot(Amyloid_data, aes(x = Race, fill = factor(Amyloid))) +
+  geom_bar(position = "fill",col = 'black') +
+  labs(x = "Race", y = "Proportion", 
+       title = "Race Distribution by Amyloidosis") +
+  scale_fill_manual(values = c("lightblue", "lightcoral"), 
+                    name = "Amyloidosis", labels = c("No", "Yes")) +
+  theme_minimal()
+ggarrange(p1, p2, ncol = 2, nrow = 1)
+```
+
+### 1. **Racial distribution (left bar chart)**
+- This chart shows the distribution of the "Race" variable in the dataset. It can be seen that **White** patients account for the vast majority of the data, with a total of 176 people, while the proportion of **African Americans (AA)** is very small, with only 13 people.
+- **White**: 176
+- **African Americans (AA)**: 13
+
+### 2. **Racial distribution by amyloid status (right stacked bar chart)**
+- For **Amyloid negative** (Amyloid = 0, blue), the proportions of **White** and **African Americans** are almost equal, and these two races account for most of the data, specifically:
+- **White**: 142
+- **African Americans**: 10
+- For **Amyloid positive** (Amyloid = 1, red), among the positive cases, **White** has 34 people and **African Americans** only has 3 people, and the proportion difference is large.
+- **White**: 34
+- **African American**: 3
+
+# 5 The relationship between coronary artery disease and amyloid
+
+```{r}
+ggplot(Amyloid_data, aes(x = Coronary.Artery.Disease, fill = factor(Amyloid))) +
+  geom_bar(position = "fill",color = 'white') +
+  labs(x = "Coronary Artery Disease", y = "Proportion",
+       title = "Coronary Artery Disease by Amyloidosis") +
+  scale_fill_manual(values = c("darkblue", "lightcoral"), 
+                    name = "Amyloidosis", labels = c("No", "Yes")) +
+  theme_minimal()
+
+```
+
+#### **Coronary Artery Disease Negative (CAD = N)**
+- In the **Amyloid Negative group (Amyloid = 0)**, approximately **31%** of patients had coronary artery disease, while **69%** of patients did not have coronary artery disease.
+- In the **Amyloid Positive group (Amyloid = 1)**, approximately **43%** of patients had coronary artery disease, while **57%** of patients did not have coronary artery disease.
+
+#### **Coronary Artery Disease Positive (CAD = Y)**
+- In the **Amyloid Negative group (Amyloid = 0)**, approximately **31%** of patients had coronary artery disease, while **69%** of patients did not have coronary artery disease.
+- In the **Amyloid Positive group (Amyloid = 1)**, **43%** of patients had coronary artery disease, while **57%** of patients did not have coronary artery disease.
+
+
+# 6 The relationship between atrial fibrillation (Afib) and amyloid
+
+```{r}
+ggplot(Amyloid_data, aes(x = Afib, fill = factor(Amyloid))) +
+  geom_bar(position = "fill",col = 'darkblue') +
+  labs(x = "Atrial Fibrillation", y = "Proportion",
+       title = "Atrial Fibrillation by Amyloidosis") +
+  scale_fill_manual(values = c("lightblue", "lightcoral"),
+                    name = "Amyloidosis", labels = c("No", "Yes")) +
+  theme_minimal()
+
+```
+
+- In the **Amyloid negative group (Amyloid = 0)**, most patients did not have atrial fibrillation (92.1%), and only a few patients had atrial fibrillation (7.9%).
+
+- In the **Amyloid positive group (Amyloid = 1)**, the incidence of atrial fibrillation was significantly higher, about **21.6%** of patients had atrial fibrillation, while **78.4%** of patients did not have atrial fibrillation.
+
+
+# 7 The relationship between diabetes and amyloid
+
+```{r}
+ggplot(Amyloid_data, aes(x = Diabetes, fill = factor(Amyloid))) +
+  geom_bar(position = "fill") +
+  labs(x = "Diabetes", y = "Proportion", 
+       title = "Diabetes Distribution by Amyloidosis") +
+ scale_fill_manual(values = 1:2, 
+                   name = "Amyloidosis", labels = c("No", "Yes")) +
+  theme_minimal()
+
+```
+
+- **Diabetes negative (N)** group: Most patients did not have amyloidosis (black bars), accounting for about **67.1%**; while the proportion of amyloid positive (pink bars) was **32.9%**.
+- **Diabetes positive (Y)** group: Although the proportion of diabetic patients was small, the proportion of amyloid positive (pink bars) and negative (black bars) in diabetic patients was almost equal, with amyloid positive being **37.8%** and negative being **62.2%**.
+
+# 8 Relationship between EMG and Amyloid
+
+```{r}
+ggplot(Amyloid_data, aes(x = EMG, fill = factor(Amyloid))) +
+  geom_bar(position = "fill") +
+  labs(x = "EMG Grade", y = "Proportion", 
+       title = "EMG Grade by Amyloidosis") +
+  scale_fill_manual(values = c("black", "lightcoral"),
+                    name = "Amyloidosis", labels = c("No", "Yes")) +
+  theme_minimal()
+```
+
+- **EMG Grade 0** group: In this group, most patients did not have amyloidosis (black bars), accounting for about **94.1%**, while the proportion of amyloid positive patients (light coral bars) was **5.9%**.
+- **EMG Grade 1** group: All patients in this group had amyloidosis (light coral bars), with **100%** of the patients being amyloid positive.
+
+
+# 9 Relationship between Nomogram Score and Amyloid
+
+```{r}
+ggplot(Amyloid_data, aes(x = Points, fill = factor(Amyloid))) +
+  geom_histogram(binwidth = 5, position = "fill",
+                 alpha = 0.7,color = 'white') +
+  labs(x = "Nomogram Score", y = "Proportion",
+       title = "Nomogram Score Distribution by Amyloidosis") +
+  scale_fill_manual(values = c("darkblue", "lightcoral"),
+                    name = "Amyloidosis", labels = c("No", "Yes")) +
+  theme_minimal()
+```
+
+- Most patients with low Nomogram scores (close to 0 points)** were not amyloid positive (blue bars). As the score increased, the number of patients with **amyloid positive (red bars)** gradually increased.
+
+- Among patients with high Nomogram scores (over 150 points), the proportion of amyloid positive patients increased significantly, while most patients with low scores were amyloid negative.
+
+# Model 
+
+## Model1 Amyloidosis ~ Nomogram
+
+```{r,message=F,warning=F}
+library(pROC)
+library(caret)
+model1 <- glm(Amyloid ~ Points, 
+              family = binomial(link = "logit"),
+              data = Amyloid_data)
+summary(model1)
+```
+
+```{r,message=F,warning=F}
+pred1 <- predict(model1, type = "response")
+roc1 <- roc(Amyloid_data$Amyloid, pred1)
+auc1 <- auc(roc1)
+
+roc1_data <- data.frame(
+  fpr = 1 - roc1$specificities,
+  tpr = roc1$sensitivities   
+)
+
+ggplot(roc1_data, aes(x = fpr, y = tpr)) +
+  geom_line(color = "darkblue", size = 1) + 
+  geom_abline(slope = 1, intercept = 0, 
+              linetype = "dashed", color = "black") + 
+  annotate("text", x = 0.7, y = 0.3, label = paste("AUC: ", round(auc1, 4)),
+           color = "darkblue", size = 5) + 
+  labs(title = "ROC Curve for Model 1", 
+       x = "False Positive Rate (FPR)", 
+       y = "True Positive Rate (TPR)") +
+  theme_minimal() 
+
+```
+
+
+## Model2 Amyloidosis ~ Risk Factors
+
+```{r,message=F,warning=F}
+model2 <- glm(Amyloid ~ Age + Sex  + Monoclonal.Gammopathy  + 
+                Afib +  Diabetes + Bilateral.,
+              family = binomial(link = "logit"),
+              data = Amyloid_data)
+summary(model2)
+```
+
+```{r,message=F,warning=F}
+pred2 <- predict(model2, type = "response")
+
+roc2 <- roc(Amyloid_data$Amyloid, pred2)
+auc2 <- auc(roc2)
+
+roc2_data <- data.frame(
+  fpr = 1 - roc2$specificities, 
+  tpr = roc2$sensitivities  
+)
+
+ggplot(roc2_data, aes(x = fpr, y = tpr)) +
+  geom_line(color = "darkgreen", size = 1) + 
+  geom_abline(slope = 1, intercept = 0, 
+              linetype = "dashed", color = "black") + 
+  annotate("text", x = 0.7, y = 0.3, 
+           label = paste("AUC: ", round(auc2, 4)), color = "darkgreen", size = 5) +  
+  labs(title = "ROC Curve for Model 2",
+       x = "False Positive Rate (FPR)", y = "True Positive Rate (TPR)") +
+  theme_minimal()
+
+```
+
+## Model3 Amyloidosis ~ Risk Factors + Severity
+
+```{r,message=F,warning=F}
+model3 <- glm(Amyloid ~ Age + Sex  + Monoclonal.Gammopathy  + 
+                Afib +  Diabetes + Bilateral.+ Grade,
+              family = binomial(link = "logit"),
+              data = Amyloid_data)
+summary(model3)
+```
+
+```{r,message=F,warning=F}
+pred3 <- predict(model3, type = "response")
+
+roc3 <- roc(Amyloid_data$Amyloid, pred3)
+auc3 <- auc(roc3)
+
+roc3_data <- data.frame(
+  fpr = 1 - roc3$specificities, 
+  tpr = roc3$sensitivities    
+)
+
+ggplot(roc3_data, aes(x = fpr, y = tpr)) +
+  geom_line(color = "darkred", size = 1) + 
+  geom_abline(slope = 1, intercept = 0, 
+              linetype = "dashed", color = "black") + 
+  annotate("text", x = 0.7, y = 0.3, 
+           label = paste("AUC: ", round(auc3, 4)), 
+           color = "darkred", size = 5) + 
+  labs(title = "ROC Curve for Model 3",
+       x = "False Positive Rate (FPR)",
+       y = "True Positive Rate (TPR)") +
+  theme_minimal()
+
+```
+
