@@ -1,0 +1,140 @@
+---
+title: "Exploratory Data Analysis on Enhancers Project"
+author: "Liwen Yin"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    latex_engine: xelatex
+---
+```{r}
+knitr::opts_chunk$set(echo = FALSE)
+```
+## EDA 
+# Distribution of activity score in three treatment groups
+Each plot shows a density histogram with an overlaid smoothed density curve. All groups show a right-skewed distribution, which means most enhancers have low activity scores, with a smaller number showing very high activity.
+```{r}
+library(dplyr)
+
+setwd("C:/Users/annik/OneDrive/Desktop/BU Fall 2024/MA675/Genetics Project")
+hksm <- read.csv("EG_HKSM_20E_col_03_11.csv")
+e20 <- read.csv("EG_20E_col_03_11.csv")
+con <- read.csv("EG_Con_col_03_11.csv")
+hksm <- hksm %>% select(-Treatment)
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+plot_new_act_score <- function(data, dataset_name) {
+  ggplot(data, aes(x = new_act_score)) +
+    geom_histogram(aes(y = ..density..), bins = 30, fill = "lightblue", color = "black", alpha = 0.7) +
+    geom_density(color = "red", size = 1) +
+    labs(title = paste("Distribution of new_act_score in", dataset_name),
+         x = "new_act_score",
+         y = "Density") +
+    theme_minimal()
+}
+#control
+plot_new_act_score(con, "control group")
+#e20 
+plot_new_act_score(e20, "e20 group")
+#hksm
+plot_new_act_score(hksm, "hksm group")
+```
+
+```{r}
+library(dplyr)
+#special column
+cols_con <- names(con)
+cols_e20 <- names(e20)
+cols_hksm <- names(hksm)
+con_only <- setdiff(cols_con, union(cols_e20, cols_hksm))
+e20_only <- setdiff(cols_e20, union(cols_con, cols_hksm))
+hksm_only <- setdiff(cols_hksm, union(cols_con, cols_e20))
+#cat(" con:\n"); print(con_only)
+#cat("\n e20:\n"); print(e20_only)
+#cat("\n hksm:\n"); print(hksm_only)
+#combine by common column
+con <- con %>% mutate(treatment = "H2O")
+hksm <- hksm %>% mutate(treatment = "HKSM")
+e20 <- e20 %>% mutate(treatment = "20E")
+common_cols <- Reduce(intersect, list(names(con), names(hksm), names(e20)))
+con_common <- con %>% select(all_of(common_cols))
+hksm_common <- hksm %>% select(all_of(common_cols))
+e20_common <- e20 %>% select(all_of(common_cols))
+cdata <- bind_rows(con_common, hksm_common, e20_common) %>%
+  mutate(treatment = factor(treatment, levels = c("H2O", "HKSM", "20E"))) %>% 
+  select(-Activity_score)
+```
+#if they share the same enhancer--no same enhancer among 3 groups
+```{r}
+enhancer_con <- unique(con$Enhancer)
+enhancer_e20 <- unique(e20$Enhancer)
+enhancer_hksm <- unique(hksm$Enhancer)
+common_enhancers <- Reduce(intersect, list(enhancer_con, enhancer_e20, enhancer_hksm))
+length(common_enhancers)
+head(common_enhancers)
+```
+#Here is the boxplot. The box represents the interquartile range (IQR), which includes the middle 50% of the data. The dots outside the whiskers represent outliers, values that fall outside 1.5 times the IQR. These are higher activity scores that deviate from the general distribution.
+```{r}
+#boxplot
+library(ggplot2)
+ggplot(cdata, aes(x = treatment, y = new_act_score, fill = treatment)) +
+  geom_boxplot() +
+  labs(
+    title = "Enhancer Activity Score by Treatment",
+    x = "Treatment Group",
+    y = "Enhancer Activity Score (new_act_score)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+#TF enrichment analysis
+We are wondering which transcription factors (TFs) are more common in high activity enhancers(activity score over 1000)?
+The bar plot shown below represents the fold enrichment of transcription factors (TFs) in high-activity enhancers for three treatment groups. It displays the top enriched TFs, comparing their frequency in high-activity enhancers versus the entire dataset.
+$$\text{Fold Enrichment} = \frac{\text{Mean TF motif count in high-activity enhancers}}{\text{Mean TF motif count in all enhancers}}$$
+
+```{r}
+library(dplyr)
+library(ggplot2)
+
+non_tf_cols <- c("Enhancer", "Genes", "new_act_score", "treatment", "TBS", "Length")
+tf_cols <- setdiff(names(cdata), non_tf_cols)
+
+plot_tf_enrichment <- function(df, treatment_label, threshold = 1000) {
+  df_t <- df %>% filter(treatment == treatment_label)
+  high_df <- df_t %>% filter(new_act_score > threshold)
+  tf_means_all <- colMeans(df_t[, tf_cols], na.rm = TRUE)
+  tf_means_high <- colMeans(high_df[, tf_cols], na.rm = TRUE)
+  tf_enrichment <- data.frame(
+    TF = tf_cols,
+    Mean_All = tf_means_all,
+    Mean_High = tf_means_high
+  ) %>%
+    mutate(Fold_Enrichment = Mean_High / (Mean_All + 1e-6)) %>%
+    arrange(desc(Fold_Enrichment)) %>%
+    head(15)
+
+  ggplot(tf_enrichment, aes(x = reorder(TF, Fold_Enrichment), y = Fold_Enrichment)) +
+    geom_col(fill = "tomato") +
+    coord_flip() +
+    labs(
+      title = paste("Top Enriched TFs in High-Activity Enhancers (", treatment_label, ")", sep = ""),
+      x = "Transcription Factor (TF)",
+      y = "Fold Enrichment (High vs All)"
+    ) +
+    geom_vline(xintercept = 1, linetype = "dashed", color = "gray50") +
+    theme_minimal()
+}
+
+plot_tf_enrichment(cdata, "H2O")
+plot_tf_enrichment(cdata, "HKSM")
+plot_tf_enrichment(cdata, "20E")
+```
+The higher the TF ranking, the more likely it is to appear on enhancers with higher activity
+A Fold Enrichment > 1 means the TF is more common in high-activity enhancers than in general  potentially important for enhancer activity.
+A Fold Enrichment ≈ 1 means no real difference.
+A Fold Enrichment < 1 means the TF is less frequent in high-activity enhancers.
+
+
+
