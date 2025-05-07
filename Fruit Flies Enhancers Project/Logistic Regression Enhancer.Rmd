@@ -1,0 +1,216 @@
+---
+title: "Fruit Flies Logistic Regression"
+author: "Jin Wen Lin"
+date: "2025-04-30"
+output: pdf_document
+---
+
+```{r, echo=FALSE}
+# load packages
+library(knitr)  
+library(kableExtra)
+library(tidyverse)
+library(stringr)
+library(tidyverse)
+library(ggplot2)
+library(psych)
+library(dplyr)
+library(gridExtra)
+library(corrplot)
+```
+
+```{r}
+# load data
+control <- read.csv("EG_Con_col_03_11.csv") %>% mutate(Group = "Control")
+twentye <- read.csv("EG_20E_col_03_11.csv") %>% mutate(Group = "20E")
+hksm <- read.csv("EG_HKSM_20E_col_03_11.csv") %>% mutate(Group = "HKSM")
+
+# combined data
+all_data <- bind_rows(control, twentye, hksm)
+```
+
+## EDA  
+
+Here is a small EDA of the distribution of the activity score.  
+
+```{r}
+# histogram of activity score by group
+ggplot(all_data, aes(x = new_act_score, fill = Group)) +
+  geom_histogram(bins = 30, alpha = 0.7) +
+  facet_wrap(~Group, scales = "free") +
+  labs(title = "Distribution of Activity Score by Group")
+
+# box plot of the three groups
+ggplot(all_data, aes(x = Group, y = new_act_score, fill = Group)) +
+  geom_boxplot() +
+  labs(title = "Activity Score by Treatment Group")
+```
+
+From the histogram, the activity scores for all of the groups are right skewed. The above box plot shows that all three groups have similar median activity scores, where the control group has high outliers, while HKSM shows more spread.  
+
+
+```{r}
+# motif columns and activity score column
+motif_cols <- 8:28
+activity_col <- 30
+
+# use median as the threshold for evaluating activity score
+threshold <- median(all_data[[activity_col]])
+all_data$activity_class <- ifelse(all_data[[activity_col]] > threshold, "High", "Low")
+all_data$activity_class <- as.factor(all_data$activity_class)
+
+# cleaned data
+cleaned_data <- all_data[, c(motif_cols, which(names(all_data) == "activity_class"))]
+
+# euclidean distance approach
+motif_matrix <- as.matrix(cleaned_data[, 1:21])
+dist_matrix <- as.matrix(dist(motif_matrix, method = "euclidean"))
+
+upper_triangle <- dist_matrix[upper.tri(dist_matrix)]
+
+ggplot(data.frame(dist = upper_triangle), aes(x = dist)) +
+  geom_histogram(binwidth = 1, fill = "steelblue", color = "white") +
+  labs(title = "Distribution of Enhancer Pairwise Distances",
+       x = "Euclidean Distance",
+       y = "Number of Enhancer Pairs") +
+  theme_minimal()
+
+
+all_data <- all_data %>%
+  mutate(chr = str_extract(Enhancer, "^[^:]+"))
+
+cleaned_data$seq <- all_data$chr
+
+
+```
+
+The histogram above shows that the distribution of the pairwise distances of enhancers. Majority of enhancer pairs have small Euclidean distances, with a peak around 2–3, indicating high similarity or clustering in feature space. Only a small proportion of pairs are far apart (less similar enhancer combinations).   
+
+
+```{r, echo = FALSE, eval=FALSE}
+set.seed(123)
+# split data into training and test data sets
+train_index <- sample(1:nrow(cleaned_data), 0.8 * nrow(cleaned_data))
+train <- cleaned_data[train_index, ]
+test <- cleaned_data[-train_index, ]
+# svm model
+svm_model <- svm(activity_class ~ ., data = train, kernel = "radial", scale = TRUE)
+
+# prediction
+pred <- predict(svm_model, newdata = test)
+# confusion matrix
+conf_mat <- table(Predicted = pred, Actual = test$activity_class)
+print(conf_mat)
+# output accuracy
+cat("Accuracy:", mean(pred == test$activity_class), "\n")
+
+# PCA visualization
+pca_res <- prcomp(train[, 1:21], scale. = TRUE)
+df_pca <- data.frame(pca_res$x[, 1:2], activity_class = train$activity_class)
+
+ggplot(df_pca, aes(x = PC1, y = PC2, color = activity_class)) +
+  geom_point(alpha = 0.7, size = 2) +
+  theme_minimal() +
+  labs(title = "Enhancer TF Motif PCA - Colored by Activity Class")
+
+```
+
+
+
+## Clustering  
+
+The following code clusters the enhancers based on the 21 Transcription Factors Motifs using Euclidean distance. The method used is k-means clustering, where it is a way to group data into K clusters based on similarity. In this case, similarity of the TFs are being considered.
+
+```{r}
+# Calculate Within cluster sum of squares
+set.seed(679)
+wss <- map_dbl(1:6, function(k) {
+  kmeans(motif_matrix, centers = k, nstart = 10)$tot.withinss
+})
+
+# Elbow Plot
+elbow_df <- data.frame(k = 1:6, wss = wss)
+ggplot(elbow_df, aes(x = k, y = wss)) +
+  geom_line() + geom_point() +
+  labs(title = "Elbow Plot for K-means Clustering",
+       x = "Number of Clusters (k)", y = "Within-cluster Sum of Squares") +
+  theme_minimal()
+
+```
+
+The elbow plot above is a way to choose the number of clusters. The y-axis is the within cluster sum of squares (WSS), which shows how close the points are to their clusters. The x-axis is the number of clusters. The elbow point is usually the best number of clusters since adding more clusters does not improve much. From the above plot, the elbow point is located at k = 5. Hence, 5 clusters are being considered.  
+
+```{r}
+# k-mean cluster for enhancers
+set.seed(123)
+km <- kmeans(motif_matrix, centers = 5, nstart = 10)
+cleaned_data$enhancer_group <- as.factor(km$cluster)
+
+cleaned_data %>%
+  count(enhancer_group, name = "count") %>%
+  arrange(desc(count))
+
+
+```
+
+
+## Logistic Model  
+
+The response variable of the logistic model is activity class (a binary variable) where enhancers with activity score above the overall median activity score are grouped as high class, and the rest are grouped as low class. The predictors are the 21 transcription factors. The two random effects are the enhancer cluster and a factor variable for the main region of the enhancer (3R,2L,X, etc.).  
+
+```{r}
+# model
+library(lme4)
+
+glmer_model <- glmer(activity_class ~ . - enhancer_group - seq + (1 | enhancer_group) 
+                     + (1|seq),
+                     data = cleaned_data,
+                     family = binomial)
+
+summary(glmer_model)
+
+library(pROC)
+pred_probs_1 <- predict(glmer_model, type = "response")
+roc_curve <- roc(cleaned_data$activity_class, pred_probs_1)
+plot(roc_curve)
+auc(roc_curve)
+
+```
+
+The above result shows the summary of the logistic regrerssion. The transcription factors of xrp1, usp, da, crp, GATA_elemento, ERR, srp_SANGER, and slp2_forkhead are statistically significant. The AUC (Area under the curve) here is 0.5872.  
+
+
+```{r}
+# prediction
+pred_class_1 <- ifelse(pred_probs_1 > 0.5, 1, 0)
+table(Predicted = pred_class_1, Actual = cleaned_data$activity_class)
+
+# confusion matrix
+TP <- 2239  # True Positives
+FP <- 2667  # False Positives
+FN <- 1669  # False Negatives
+TN <- 1242  # True Negatives
+
+# Accuracy
+accuracy <- (TP + TN) / (TP + TN + FP + FN)
+
+# Precision
+precision <- TP / (TP + FP)
+
+# Recall
+recall <- TP / (TP + FN)
+
+# F1-score
+f1 <- 2 * (precision * recall) / (precision + recall)
+
+# print result
+cat("Accuracy: ", round(accuracy, 4), "\n")
+cat("Precision: ", round(precision, 4), "\n")
+cat("Recall: ", round(recall, 4), "\n")
+cat("F1-score: ", round(f1, 4), "\n")
+
+```
+
+Above shows a summary of the overall prediction of the logistic regression as an evaluation of the performance.
+
+
