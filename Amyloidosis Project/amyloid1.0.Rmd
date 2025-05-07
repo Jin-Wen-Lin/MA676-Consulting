@@ -1,0 +1,235 @@
+---
+title: "Amyloid"
+author: "Liwen Yin"
+date: "`r Sys.Date()`"
+output: pdf_document
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+## data cleaning
+
+```{r}
+library(dplyr)
+neg <- read.csv("Amyloid_negative.csv")
+pos <- read.csv("Amyloid_positive.csv")
+amyloid <- rbind(neg, pos) 
+colnames(amyloid)[which(names(amyloid) == "Amyloid")] <- "amyloid_status"
+
+amyloid <- amyloid %>%
+  dplyr::select(-matches("X")) %>%
+  mutate(amyloid_status = factor(ifelse(amyloid_status == "Y", 1, 0))) %>%
+  mutate(
+    Laterality = as.factor(Laterality),
+    Race = as.factor(Race),
+    Monoclonal.Gammopathy = as.factor(Monoclonal.Gammopathy),
+    Rheumatoid.Arthritis = as.factor(Rheumatoid.Arthritis),
+    Coronary.Artery.Disease = as.factor(Coronary.Artery.Disease),
+    Afib = as.factor(Afib),
+    Degenerative.Spine.Disease = as.factor(Degenerative.Spine.Disease),
+    Diabetes = as.factor(Diabetes),
+    Tendinopathy = as.factor(Tendinopathy),
+    EMG = as.factor(EMG),
+    Bilateral = as.factor(Bilateral.)
+  )
+amyloid$Grade <- factor(amyloid$Grade, 
+                   levels = c(0, "mild", "moderate", "severe"), 
+                   labels = c("none", "mild", "moderate", "severe"))
+amyloid<- amyloid %>% filter(!is.na(Grade))
+amyloid <- amyloid %>%
+  mutate(
+    Severity = factor(
+      ifelse(Grade %in% c("none", "mild", "moderate"), "Low", "Severe"),
+      levels = c("Low", "Severe") 
+    )
+  )
+write.csv(amyloid, "amyloid.csv", row.names = FALSE)
+```
+
+## logistic regression model
+
+```{r}
+library(rstanarm)
+library(arm)
+library(pROC)
+model1 <- glm(amyloid_status ~ Race + Age + Afib + Degenerative.Spine.Disease + Bilateral. + Monoclonal.Gammopathy + Rheumatoid.Arthritis + Severity, data = amyloid, family = binomial)
+summary(model1)
+set.seed(1)
+predicted_probs <- predict(model1, type = "response")
+roc_curve <- roc(amyloid$amyloid_status, predicted_probs)
+auc_value <- auc(roc_curve)
+plot(roc_curve,  main = paste("ROC Curve for glm Model (AUC =", round(auc_value, 3), ")"), 
+     col = "blue", 
+     lwd = 2, legacy.axes = TRUE)
+print(paste("AUC:", round(auc_value, 3)))
+```
+
+## Bayesian generalized linear models
+```{r}
+library(rstanarm)
+library(arm)
+library(pROC)
+bayes_model <- stan_glm(amyloid_status ~ Grade, 
+                        data = amyloid, 
+                        family = binomial, 
+                        prior = student_t(3, 0, 2.5),  #weakly informative
+                        chains = 4, iter = 2000, seed = 123,refresh = 0)
+
+summary(bayes_model)
+#Credible Interval
+posterior_interval(bayes_model, prob = 0.95)
+#pp check
+pp_check(bayes_model)
+#Odds ratio
+exp(posterior_interval(bayes_model, prob = 0.95))
+#ROC & AUC
+set.seed(1)
+predicted_probs <- posterior_predict(bayes_model, type = "response") %>% colMeans()
+actual_values <- amyloid$amyloid_status
+roc_curve <- roc(actual_values, predicted_probs,levels = c(0, 1))
+auc_value <- auc(roc_curve)
+plot(roc_curve,  main = paste("ROC Curve for Bayes Model (AUC =", round(auc_value, 3), ")"), 
+     col = "blue", 
+     lwd = 2, legacy.axes = TRUE)
+print(paste("AUC:", round(auc_value, 3)))
+```
+
+For every unit increase in the linear component of Grade, the log-odds of amyloid positivity increase by 3.2.
+mean_posterior predictive distribution:the mean is 0.2, suggesting the model predicts an average probability of positive as approximately 20% across the dataset.
+95% Bayesian credible intervals : The linear effect of Grade is strongly positive.
+The quadratic effect of Grade includes zero, suggesting no significant quadratic effect.
+odds ratio: Linear Effect of Grade OR: [0.01, 0.21] : The baseline odds of amyloid positivity are very low.
+Quadratic Effect of Grade OR: [2.51, 1211.14] : Indicates that higher Grade strongly increases the odds of amyloid positivity.
+pp check: Posterior predictive distribution compared to the observed data distribution; Slight deviations at very low probabilities.
+
+```{r}
+bayes_model2 <- stan_glm(
+  amyloid_status ~ Grade, 
+  data = amyloid, 
+  family = binomial,
+  prior = normal(0, 1, autoscale = TRUE),  # Ordered effect prior
+  chains = 4, iter = 2000, seed = 123,refresh = 0
+)
+summary(bayes_model2)
+set.seed(1)
+predicted_probs <- posterior_predict(bayes_model2, type = "response") %>% colMeans()
+actual_values <- amyloid$amyloid_status
+roc_curve <- roc(actual_values, predicted_probs,levels = c(0, 1))
+auc_value <- auc(roc_curve)
+plot(roc_curve,  main = paste("ROC Curve for Severity Bayes Model (AUC =", round(auc_value, 3), ")"), 
+     col = "blue", 
+     lwd = 2, legacy.axes = TRUE)
+print(paste("AUC:", round(auc_value, 3)))
+```
+
+Autoscaling adjusts the prior standard deviation relative to the data scale, ensuring that the prior matches the actual predictor variability.
+The normal prior with scaling ensures coefficients are regularized to prevent extreme estimates in case of sparse data.
+
+```{r}
+library(rstanarm)
+bayes_model3 <- stan_glm(
+  amyloid_status ~ Race + Age + Afib + Degenerative.Spine.Disease + Bilateral. + Monoclonal.Gammopathy + Rheumatoid.Arthritis +Severity,
+  data = amyloid,
+  family = binomial,
+ prior = normal(0, 5),  
+  chains = 4, iter = 2000, seed = 123, refresh = 0
+)
+print(summary(bayes_model3), digits=4)
+set.seed(1)
+predicted_probs <- posterior_predict(bayes_model3, type = "response") %>% colMeans()
+actual_values <- amyloid$amyloid_status
+roc_curve <- roc(actual_values, predicted_probs,levels = c(0, 1))
+auc_value <- auc(roc_curve)
+plot(roc_curve,  main = paste("ROC Curve for Bayes Model 3 (AUC =", round(auc_value, 3), ")"), 
+     col = "blue", 
+     lwd = 2, legacy.axes = TRUE)
+print(paste("AUC:", round(auc_value, 3)))
+```
+
+```{r}
+library(rstanarm)
+bayes_model6 <- stan_glm(
+  amyloid_status ~ Race + Age + Afib + Degenerative.Spine.Disease + Bilateral. + Monoclonal.Gammopathy + Rheumatoid.Arthritis +Severity,
+  data = amyloid,
+  family = binomial,
+ prior = student_t(1,0, 5),  
+  chains = 4, iter = 2000, seed = 123, refresh = 0
+)
+print(summary(bayes_model6), digits=4)
+set.seed(1)
+predicted_probs <- posterior_predict(bayes_model6, type = "response") %>% colMeans()
+actual_values <- amyloid$amyloid_status
+roc_curve <- roc(actual_values, predicted_probs,levels = c(0, 1))
+auc_value <- auc(roc_curve)
+plot(roc_curve,  main = paste("ROC Curve for Bayes Model 6 (AUC =", round(auc_value, 3), ")"), 
+     col = "blue", 
+     lwd = 2, legacy.axes = TRUE)
+print(paste("AUC:", round(auc_value, 3)))
+```
+
+
+normal(0, 1) indicates no strong prior belief about the direction (positive or negative) of the effect of the predictors on the log-odds of amyloid_status.
+A standard deviation of 1 allows for moderate variability in the coefficients.
+prior_intercept = normal(0, 5):Allows for wide baseline probabilities, accommodating substantial uncertainty in the initial prevalence of the outcome.
+
+```{r}
+bayes_model4 <- stan_glm(
+  amyloid_status ~ Points,  
+  data = amyloid,          
+  family = binomial,        
+  prior = normal(0, 1),     # Weakly informative
+  prior_intercept = normal(0, 5),  
+  chains = 4, iter = 2000, seed = 123, refresh = 0
+)
+summary(bayes_model4)
+set.seed(1)
+predicted_probs <- posterior_predict(bayes_model4, type = "response") %>% colMeans()
+actual_values <- amyloid$amyloid_status
+roc_curve <- roc(actual_values, predicted_probs,levels = c(0, 1))
+auc_value <- auc(roc_curve)
+plot(roc_curve,  main = paste("ROC Curve for Bayes Model 2 (AUC =", round(auc_value, 3), ")"), 
+     col = "blue", 
+     lwd = 2, legacy.axes = TRUE)
+print(paste("AUC:", round(auc_value, 3)))
+pp_check(bayes_model4)
+```
+
+```{r}
+reg <- glm(amyloid_status ~ Points, family = binomial, data = amyloid)
+summary(reg)
+library(pROC)
+set.seed(1)
+predicted_probs <- predict(reg, type = "response")
+actual_values <- amyloid$amyloid_status
+roc_curve <- roc(actual_values, predicted_probs)
+auc_value <- auc(roc_curve)
+auc_value_rounded <- round(auc_value, 3)
+plot(roc_curve, main = paste("ROC Curve for Logistic Regression Model (AUC:", auc_value_rounded, ")"), col = "blue", lwd = 2, legacy.axes = TRUE)
+print(paste("AUC=", auc_value_rounded))
+```
+
+If the effect of Points is relatively small (statistically significant in glm, but with a small actual effect size), the prior distribution tends to shrink the coefficient of Points toward 0.
+
+amyloid_status ~ Points + grade
+```{r}
+bayes_model5 <- stan_glm(
+  amyloid_status ~ Grade + Points,  
+  data = amyloid,          
+  family = binomial,        
+  prior = normal(0, 5),     # Weakly informative
+  prior_intercept = normal(0, 5),  
+  chains = 4, iter = 2000, seed = 123, refresh = 0
+)
+print(summary(bayes_model5),digit = 4)
+library(pROC)
+set.seed(1)
+predicted_probs <- predict(bayes_model5, type = "response")
+actual_values <- amyloid$amyloid_status
+roc_curve <- roc(actual_values, predicted_probs)
+auc_value <- auc(roc_curve)
+auc_value_rounded <- round(auc_value, 3)
+plot(roc_curve, main = paste("ROC Curve for Bayes Model (AUC=", auc_value_rounded, ")"), col = "blue", lwd = 2, legacy.axes = TRUE)
+print(paste("AUC=", auc_value_rounded))
+```
+

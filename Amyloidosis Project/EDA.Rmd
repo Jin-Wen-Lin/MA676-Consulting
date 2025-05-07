@@ -1,0 +1,86 @@
+---
+title: "amyloid2.0"
+author: "Liwen Yin"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r}
+amypopu <- read.csv("Amyloid All Patients.csv")
+amypopu$sample <- factor(ifelse(seq_len(nrow(amypopu)) <= 189, 1, 0))
+library(dplyr)
+amypopu <- amypopu %>%
+  mutate(
+    Severity = ifelse(Grade %in% c("0", "mild", "moderate"), "low",
+                      ifelse(Grade == "severe", "high", NA)),
+    Severity = factor(Severity, levels = c("low", "high")), 
+    amyloid_status = ifelse(Amyloid == "Y", 1, 0),  
+    amyloid_status = factor(amyloid_status, levels = c(0, 1))
+  ) %>%
+  dplyr::select(-Amyloid,-Grade) %>% 
+    dplyr::select(-matches("X")) 
+amyloid <- read.csv("amyloid.csv")
+amyloid$amyloid_status <- as.factor(amyloid$amyloid_status)
+```
+
+
+
+```{r}
+summ <- aggregate(cbind(Age, Points) ~ sample, data = amypopu, summary)
+summ
+library(ggplot2)
+
+#Age
+ggplot(amypopu, aes(x = factor(sample), y = Age, fill = factor(sample))) +
+  geom_boxplot() +
+  labs(title = "Age Distribution in Sample vs. Non-Sample", x = "Sample (1=Yes, 0=No)", y = "Age") +
+  theme_minimal()
+#Points
+ggplot(amypopu, aes(x = factor(sample), y = Points, fill = factor(sample))) +
+  geom_boxplot() +
+  labs(title = "Points Distribution in Sample vs. Non-Sample", x = "Sample (1=Yes, 0=No)", y = "Points") +
+  theme_minimal()
+```
+
+
+```{r}›‹
+library(pROC)
+Model1 <- glm(sample ~ Points, data = amypopu, family = binomial)
+summary(Model1)
+amypopu$prob_sample <- predict(Model1, type = "response")
+amypopu$weight <- ifelse(amypopu$sample == 1, 1 / amypopu$prob_sample, NA)
+amyloid <- amyloid %>%
+  mutate(weight = amypopu$weight[1:189])
+fit_weighted <- glm(amyloid_status ~ Points + Severity, 
+                      data = amyloid, 
+                      family = quasibinomial, 
+                      weights = weight)
+summary(fit_weighted)
+library(arm)
+binnedplot(fitted(fit_weighted), residuals(fit_weighted, type = "response"),
+           main = "Binned Residual Plot",
+           xlab = "Fitted Values", ylab = "Residuals")
+predicted_probs <- predict(fit_weighted, type = "response")
+roc_curve <- roc(amyloid$amyloid_status, predicted_probs)
+auc_value <- auc(roc_curve)
+plot(roc_curve,  main = paste("ROC Curve with AUC =", round(auc_value, 3)), 
+     col = "blue", 
+     lwd = 2, legacy.axes = TRUE)
+print(paste("AUC:", round(auc_value, 3)))
+```
+```{r}
+library(pROC)
+fit_unweighted <- glm(amyloid_status ~ Points + Severity, data = amyloid, family = binomial)
+summary(fit_unweighted)
+predicted_probs <- predict(fit_unweighted, type = "response")
+roc_curve <- roc(amyloid$amyloid_status, predicted_probs)
+auc_value <- auc(roc_curve)
+plot(roc_curve,  main = paste("ROC Curve with AUC =", round(auc_value, 3)), 
+     col = "blue", 
+     lwd = 2, legacy.axes = TRUE)
+print(paste("AUC:", round(auc_value, 3)))
+binnedplot(fitted(fit_unweighted), residuals(fit_unweighted, type = "response"),
+           main = "Binned Residual Plot",
+           xlab = "Fitted Values", ylab = "Residuals")
+```
+
